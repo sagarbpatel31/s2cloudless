@@ -1,110 +1,119 @@
-from s2cloudless import S2PixelCloudDetector
+import os
+import sys
+import argparse
 import numpy as np
 import rasterio
-from rasterio.warp import reproject, Resampling
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from PIL import Image
-import sys
-import os
-import argparse
-
+import math
+from rasterio.windows import from_bounds
+from rasterio.enums import Resampling
+from s2cloudless import S2PixelCloudDetector
+from skimage.transform import resize
+# ----------------------- Argument Parsing -----------------------
 parser = argparse.ArgumentParser()
-parser.add_argument("--input", required=True, help="path to the folder where the jp2 files of the L1C product are located (IMG_DATA)")
-parser.add_argument("--mode", required=True,  choices=["validation", "CVAT-VSM"], help="validation: output images rescaled to 10980x10980px, mask output with pixel values 0 or 255, probability output with colormap. CVAT-VSM: output image dimensions 1830x1830px, mask output with pixel values 0 or 1, probabilty output as greyscaled.")
+parser.add_argument("--input", required=True, help="Path to IMG_DATA folder inside .SAFE tile")
+parser.add_argument("--output", required=True, help="Path to save the cloud masks")
+parser.add_argument("--mode", required=True, choices=["validation", "CVAT-VSM"], help="Output format mode")
+parser.add_argument("--bounds", required=False, help="Bounds in format (minx,miny,maxx,maxy)")
+parser.add_argument("--name", required=True, help="Filename prefix for output")
 a = parser.parse_args()
-
-input_folder=a.input
-save_to=""
-
-if(a.mode=="CVAT-VSM"):
-    save_to=input_folder.replace("IMG_DATA","S2CLOUDLESS_DATA")
-    if(os.path.isdir(save_to)==False):
-        os.makedirs(save_to)
-        print("Created folder "+save_to)
-
-
-#Check the name of the product in the folder
-
-identifier=""
+input_folder = a.input
+save_to = a.output
+identifier = ""
+# Parse optional bounds
+bounds = tuple(map(float, a.bounds.strip("()").split(','))) if a.bounds else None
+# If CVAT-VSM, overwrite save path to be inside tile folder
+if a.mode == "CVAT-VSM":
+    save_to = input_folder.replace("IMG_DATA", "S2CLOUDLESS_DATA")
+# Ensure output folder exists
+os.makedirs(save_to, exist_ok=True)
+print(f"Saving output to: {save_to}")
+# Get common filename identifier (e.g., S2A_MSIL1C_...)
 for filename in os.listdir(input_folder):
-    if("B01.jp2" in filename):
-        identifier=filename.split("B01")[0]
-        
-def plot_cloud_mask(mask, figsize=(15, 15), fig=None):
-    """
-    Utility function for plotting a binary cloud mask.
-    """ 
-    if(a.mode=="validation"): 
-        new_mask = [[255 if b==1 else b for b in i] for i in mask]
-        im_result = Image.fromarray(np.uint8(new_mask))
-        im_result=im_result.resize((10980,10980),Image.NEAREST)
-        im_result.save(identifier+"_s2cloudless_prediction.png")
+    if "B01.jp2" in filename:
+        identifier = filename.split("B01")[0]
+        break
+# ----------------------- Helper Functions -----------------------
+def read_band(path, target_shape=None, bounds=None):
+    with rasterio.open(path) as dataset:
+        if bounds:
+            window = from_bounds(*bounds, transform=dataset.transform)
+            data = dataset.read(window=window)
+        else:
+            data = dataset.read()
+        if target_shape:
+            band_resized = resize(data[0], target_shape, preserve_range=True, order=1, anti_aliasing=False)
+            return band_resized[np.newaxis, ...].astype(np.float32)
+        else:
+            return data
+def plot_cloud_mask(mask):
+    if a.mode == "validation":
+        new_mask = np.where(mask == 1, 255, 0).astype(np.uint8)
+        im_result = Image.fromarray(new_mask)
+        im_result = im_result.resize((10980, 10980), Image.NEAREST)
+        im_result.save(os.path.join(save_to, f"{a.name}_cloud_mask_preview.png"))
     else:
-        im_result = Image.fromarray(np.uint8(mask))
-        im_result.save(os.path.join(save_to,"s2cloudless_prediction.png"))
-
-def plot_probability_map(prob_map, figsize=(15, 15)):
-    if(a.mode=="validation"):
-        plt.figure(figsize=figsize)
-        plt.imshow(prob_map,cmap=plt.cm.inferno)
-        plt.savefig(identifier+"_s2cloudless_probability.png")
+        im_result = Image.fromarray(mask.astype(np.uint8))
+        im_result.save(os.path.join(save_to, f"{a.name}_cloud_mask_preview.png"))
+def plot_probability_map(prob_map):
+    if a.mode == "validation":
+        plt.figure(figsize=(10, 10))
+        plt.imshow(prob_map, cmap='inferno')
+        plt.savefig(os.path.join(save_to, f"{a.name}_cloud_prob_colormap.png"))
     else:
-        im_result = Image.fromarray(np.uint8(prob_map * 255))
-        im_result.save(os.path.join(save_to,"s2cloudless_probability.png"))       
+        im_result = Image.fromarray((prob_map * 255).astype(np.uint8))
+        im_result.save(os.path.join(save_to, f"{a.name}_cloud_prob.png"))
+# ----------------------- Load and Resample Bands -----------------------
+print("Reading and aligning bands...")
+band_names = ['B01', 'B02', 'B04', 'B05', 'B08', 'B8A', 'B09', 'B10', 'B11', 'B12']
+band_paths = [os.path.join(input_folder, f"{identifier}{b}.jp2") for b in band_names]
+# First, read B02 to define target shape
+B02 = read_band(band_paths[1], bounds=bounds)
+target_shape = B02.shape[1:]
+# Read all bands to the same shape
+bands_resampled = []
+for idx, path in enumerate(band_paths):
+    band = read_band(path, target_shape=target_shape, bounds=bounds)
+    print(f"{band_names[idx]} shape: {band.shape}")
+    bands_resampled.append(band[0] / 10000.0)  # normalize reflectance
+# Stack into (1, H, W, 10)
+bands = np.array([np.dstack(bands_resampled)])
 
-#Resampling to achieve 10 m resolution:
-
-with rasterio.open(os.path.join(input_folder,identifier+"B01.jp2")) as dataset:
-    B01 = dataset.read(out_shape=(dataset.count,int(dataset.height * 6),int(dataset.width * 6)),resampling=Resampling.bilinear)                  
-    print(B01.shape)
-
-with rasterio.open(os.path.join(input_folder,identifier+"B02.jp2")) as dataset:
-    B02 = dataset.read(out_shape=(dataset.count,int(dataset.height * 1),int(dataset.width * 1)),resampling=Resampling.bilinear)
-    print(B02.shape)
-    
-with rasterio.open(os.path.join(input_folder,identifier+"B04.jp2")) as dataset:
-    B04 = dataset.read(out_shape=(dataset.count,int(dataset.height * 1),int(dataset.width * 1)),resampling=Resampling.bilinear)
-    print(B04.shape)
-    
-with rasterio.open(os.path.join(input_folder,identifier+"B05.jp2")) as dataset:
-    B05 = dataset.read(out_shape=(dataset.count,int(dataset.height * 2),int(dataset.width * 2)),resampling=Resampling.bilinear)
-    print(B05.shape)
-    
-with rasterio.open(os.path.join(input_folder,identifier+"B08.jp2")) as dataset:
-    B08 = dataset.read(out_shape=(dataset.count,int(dataset.height * 1),int(dataset.width * 1)),resampling=Resampling.bilinear)
-    print(B08.shape)
-    
-with rasterio.open(os.path.join(input_folder,identifier+"B8A.jp2")) as dataset:
-    B8A = dataset.read(out_shape=(dataset.count,int(dataset.height * 2),int(dataset.width * 2)),resampling=Resampling.bilinear)
-    print(B8A.shape)
-    
-with rasterio.open(os.path.join(input_folder,identifier+"B09.jp2")) as dataset:
-    B09 = dataset.read(out_shape=(dataset.count,int(dataset.height * 6),int(dataset.width * 6)),resampling=Resampling.bilinear)
-    print(B09.shape)
-    
-with rasterio.open(os.path.join(input_folder,identifier+"B10.jp2")) as dataset:
-    B10 = dataset.read(out_shape=(dataset.count,int(dataset.height * 6),int(dataset.width * 6)),resampling=Resampling.bilinear)
-    print(B10.shape)
-    
-with rasterio.open(os.path.join(input_folder,identifier+"B11.jp2")) as dataset:
-    B11 = dataset.read(out_shape=(dataset.count,int(dataset.height * 2),int(dataset.width * 2)),resampling=Resampling.bilinear)
-    print(B11.shape)
-    
-with rasterio.open(os.path.join(input_folder,identifier+"B12.jp2")) as dataset:
-    B12 = dataset.read(out_shape=(dataset.count,int(dataset.height * 2),int(dataset.width * 2)),resampling=Resampling.bilinear)
-    print(B12.shape)
-
-bands = np.array([np.dstack((B01[0]/10000.0,B02[0]/10000.0,B04[0]/10000.0,B05[0]/10000.0,B08[0]/10000.0,B8A[0]/10000.0,B09[0]/10000.0,B10[0]/10000.0,B11[0]/10000.0,B12[0]/10000.0))])
-
-#Recommended parameters for 60 m resolution: average_over = 4, dilation_size=2
-#Recommended parameters for 10 m resolution: average_over=22, dilation_size=11
-#The actual best result is achievable by trying different values for different products.
-
-cloud_detector = S2PixelCloudDetector(threshold=0.4, average_over=22, dilation_size=11)  
+for i, b in enumerate(bands_resampled):
+    print(f"B{i+1} min: {b.min()}, max: {b.max()}, shape: {b.shape}")
+# ----------------------- Cloud Detection -----------------------
+cloud_detector = S2PixelCloudDetector(threshold=0.4, average_over=22, dilation_size=11)
 cloud_probs = cloud_detector.get_cloud_probability_maps(bands)
-mask = cloud_detector.get_cloud_masks(bands).astype(rasterio.uint8)
-
-plot_cloud_mask(mask[0])
-plot_probability_map(cloud_probs[0])
+cloud_mask = cloud_detector.get_cloud_masks(bands).astype(np.uint8)
+# Plot preview images
+# plot_cloud_mask(cloud_mask[0])
+# plot_probability_map(cloud_probs[0])
+# ----------------------- Save GeoTIFFs -----------------------
+ref_band_path = band_paths[1]  # use B02 as reference
+with rasterio.open(ref_band_path) as ref:
+    profile = ref.profile
+    transform = ref.transform
+    crs = ref.crs
+# Update for single-band, 8-bit output
+profile.update(
+    dtype=rasterio.uint8,
+    count=1,
+    compress='lzw',
+    height=target_shape[0],
+    width=target_shape[1],
+    transform=rasterio.transform.from_origin(ref.bounds.left, ref.bounds.top, 10.0, 10.0),
+    crs=crs
+)
+cloud_mask_path = os.path.join(save_to, f"{a.name}_cloud_mask.tif")
+cloud_prob_path = os.path.join(save_to, f"{a.name}_cloud_prob.tif")
+# Write cloud mask
+with rasterio.open(cloud_mask_path, 'w', **profile) as dst:
+    dst.write(cloud_mask[0], 1)
+# Write cloud probability (scaled 0–255)
+with rasterio.open(cloud_prob_path, 'w', **profile) as dst:
+    dst.write((cloud_probs[0] * 255).astype(np.uint8), 1)
+print(f":white_check_mark: Saved cloud mask: {cloud_mask_path}")
+print(f":white_check_mark: Saved cloud probability map: {cloud_prob_path}")
