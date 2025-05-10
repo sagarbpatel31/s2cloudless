@@ -39,12 +39,22 @@ with rasterio.open(band_paths[1]) as ref:
     target_shape = ref_data.shape
 
 bands_resampled = []
+scale_detected = None
+
 for path in band_paths:
     with rasterio.open(path) as ds:
         window = from_bounds(*bounds, transform=ds.transform)
         data = ds.read(1, window=window, resampling=Resampling.bilinear)
+        print(f"{os.path.basename(path)} stats: min={data.min()}, max={data.max()}, mean={data.mean()}")
+        if scale_detected is None:
+            scale_detected = "raw" if data.max() > 100.0 else "normalized"
         data_resized = resize(data, target_shape, preserve_range=True, anti_aliasing=False)
-        bands_resampled.append(data_resized / 10000.0)
+        if scale_detected == "raw":
+            bands_resampled.append(data_resized / 10000.0)
+        else:
+            bands_resampled.append(data_resized)
+
+print(f"📊 Detected reflectance scale: {scale_detected}")
 
 stacked = np.dstack(bands_resampled)
 bands = np.array([stacked])
@@ -53,7 +63,8 @@ cloud_detector = S2PixelCloudDetector(threshold=0.4, average_over=4, dilation_si
 cloud_probs = cloud_detector.get_cloud_probability_maps(bands)
 cloud_mask = cloud_detector.get_cloud_masks(bands).astype(np.uint8)
 
-print(f"Cloud stats: prob min={cloud_probs.min()}, max={cloud_probs.max()}, mean={cloud_probs.mean()}")
+print(f"🌥️ Cloud stats: prob min={cloud_probs.min()}, max={cloud_probs.max()}, mean={cloud_probs.mean()}")
+print(f"🧩 Unique cloud mask values: {np.unique(cloud_mask)}")
 
 with rasterio.open(band_paths[1]) as ref:
     transform = ref.window_transform(window)
@@ -70,7 +81,6 @@ profile.update({
     'dtype': 'uint8',
     'compress': 'lzw'
 })
-
 
 cloud_mask_path = os.path.join(save_to, f"{args.name}_cloud_mask.tif")
 cloud_prob_path = os.path.join(save_to, f"{args.name}_cloud_prob.tif")
