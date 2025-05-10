@@ -58,8 +58,8 @@ print(f"Cloud stats: prob min={cloud_probs.min()}, max={cloud_probs.max()}, mean
 with rasterio.open(band_paths[1]) as ref:
     transform = ref.window_transform(window)
     crs = ref.crs
+    profile = ref.profile.copy()
 
-profile = ref.profile.copy()
 profile.update({
     'driver': 'GTiff',
     'height': target_shape[0],
@@ -70,6 +70,7 @@ profile.update({
     'dtype': 'uint8',
     'compress': 'lzw'
 })
+
 
 cloud_mask_path = os.path.join(save_to, f"{args.name}_cloud_mask.tif")
 cloud_prob_path = os.path.join(save_to, f"{args.name}_cloud_prob.tif")
