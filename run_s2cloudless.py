@@ -9,6 +9,8 @@ from PIL import Image
 import sys
 import os
 import argparse
+from rasterio.windows import from_bounds
+from rasterio.enums import Resampling
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--input", required=True, help="path to the folder where the jp2 files of the L1C product are located (IMG_DATA)")
@@ -87,43 +89,43 @@ def read_band(path, scale=1, bounds=None):
 
 B01_path = os.path.join(input_folder,identifier+"B01.jp2")
 B01 = read_band(B01_path, 6, bounds)
-print(B01.shape)
+print(B01.shape, flush=True)
 
 B02_path = os.path.join(input_folder,identifier+"B02.jp2")
 B02 = read_band(B02_path, 1, bounds)
-print(B01.shape)
+print(B01.shape, flush=True)
 
 B04_path = os.path.join(input_folder,identifier+"B04.jp2")
 B04 = read_band(B04_path, 1, bounds)
-print(B04.shape)
+print(B04.shape, flush=True)
 
 B05_path = os.path.join(input_folder,identifier+"B05.jp2")
 B05 = read_band(B05_path, 2, bounds)
-print(B05.shape)
+print(B05.shape, flush=True)
 
 B08_path = os.path.join(input_folder,identifier+"B08.jp2")
 B08 = read_band(B08_path, 1, bounds)
-print(B08.shape)
+print(B08.shape, flush=True)
 
 B8A_path = os.path.join(input_folder,identifier+"B8A.jp2")
 B8A = read_band(B8A_path, 2, bounds)
-print(B8A.shape)
+print(B8A.shape, flush=True)
 
 B09_path = os.path.join(input_folder,identifier+"B09.jp2")
 B09 = read_band(B09_path, 6, bounds)
-print(B09.shape)
+print(B09.shape, flush=True)
 
 B10_path = os.path.join(input_folder,identifier+"B10.jp2")
 B10 = read_band(B10_path, 6, bounds)
-print(B05.shape)
+print(B05.shape, flush=True)
 
 B11_path = os.path.join(input_folder,identifier+"B11.jp2")
 B11 = read_band(B11_path, 2, bounds)
-print(B11.shape)
+print(B11.shape, flush=True)
 
 B12_path = os.path.join(input_folder,identifier+"B12.jp2")
 B12 = read_band(B12_path, 2, bounds)
-print(B12.shape)
+print(B12.shape, flush=True)
 
 bands = np.array([np.dstack((B01[0]/10000.0,B02[0]/10000.0,B04[0]/10000.0,B05[0]/10000.0,B08[0]/10000.0,B8A[0]/10000.0,B09[0]/10000.0,B10[0]/10000.0,B11[0]/10000.0,B12[0]/10000.0))])
 
