@@ -133,7 +133,7 @@ bands = np.array([np.dstack((B01[0]/10000.0,B02[0]/10000.0,B04[0]/10000.0,B05[0]
 #Recommended parameters for 10 m resolution: average_over=22, dilation_size=11
 #The actual best result is achievable by trying different values for different products.
 
-cloud_detector = S2PixelCloudDetector(threshold=0.4, average_over=22, dilation_size=11)  
+cloud_detector = S2PixelCloudDetector(threshold=0.4, average_over=12, dilation_size=4)  
 cloud_probs = cloud_detector.get_cloud_probability_maps(bands)
 mask = cloud_detector.get_cloud_masks(bands).astype(rasterio.uint8)
 
